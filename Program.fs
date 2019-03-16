@@ -100,7 +100,7 @@ module Type =
                             let typ2 = typeOf' term2
                             let typ3 = typeOf' term3
                             if typ2 = typ3 then typ2
-                            else Error <| sprintf "Types mismatch: %A and %A" typ2 typ3
+                            else Error <| sprintf "Type mismatch: %A and %A" typ2 typ3
                         | _ -> Error "Unsupported type for IfThenElse")
             | Succ k ->
                 typeOf' k
@@ -154,6 +154,9 @@ let main argv =
     let terms =
         [
             IfThenElse (True, Var "a", Var "b")
+            IfThenElse (True, Var "a", Var "c")
+            IfThenElse (True, False, Var "c")
+            IfThenElse (Zero, Zero, Zero)
         ]
     for term in terms do
         printfn ""
