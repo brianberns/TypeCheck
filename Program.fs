@@ -6,6 +6,8 @@
     | Succ of Term
     | Pred of Term
     | IsZero of Term
+    | Var of string
+    | Let of (string * Term * Term)
 
 let rec eval term =
 
@@ -25,7 +27,7 @@ let rec eval term =
             let t' = simplify t1
             eval <| IfThenElse (t', t2, t3)
         | Succ t1 ->
-            let t' = simplify t1
+            let t' = eval t1
             Succ t'
         | Pred Zero -> Zero
         | Pred (Succ k) -> eval k
@@ -37,6 +39,7 @@ let rec eval term =
         | IsZero t1 ->
             let t' = simplify t1
             eval <| IsZero t'
+        | _ -> failwith "No rule applies"
 
 type Type =
     | Bool
@@ -47,12 +50,12 @@ let rec typeOf =
         | True
         | False -> Ok Bool
         | Zero -> Ok Nat
-        | IfThenElse (trm1, trm2, trm3) ->
-            typeOf trm1
+        | IfThenElse (term1, term2, term3) ->
+            typeOf term1
                 |> Result.bind (function
                     | Bool ->
-                        let typ2 = typeOf trm2
-                        let typ3 = typeOf trm3
+                        let typ2 = typeOf term2
+                        let typ3 = typeOf term3
                         if typ2 = typ3 then typ2
                         else Error "Types mismatch"
                     | _ -> Error "Unsupported type for IfThenElse")
@@ -72,12 +75,35 @@ let rec typeOf =
                     | Nat -> Ok Bool
                     | _ -> Error "Unsupported type for IsZero")
 
+type TypeEnv = List<string * Type>
+type TermEnv = List<string * Term>
+
+let addType name typ (env : TypeEnv) : TypeEnv =
+    (name, typ) :: env
+
+let rec getTypeFromEnv name (env : TypeEnv) =
+    match env with
+        | [] -> None
+        | ((name', typ) :: tail) ->
+            if name' = name then Some typ
+            else getTypeFromEnv name tail
+
+let addTerm name term (env : TermEnv) : TermEnv =
+    (name, term) :: env
+
+let rec getTermFromEnv name (env : TermEnv) =
+    match env with
+        | [] -> None
+        | ((name', term) :: tail) ->
+            if name' = name then Some term
+            else getTermFromEnv name tail
+
 [<EntryPoint>]
 let main argv =
     let terms =
         [
-            // IfThenElse (Zero, Zero, Zero)
-            // IfThenElse (True, Zero, (Succ Zero))
+            IfThenElse (Zero, Zero, Zero)
+            IfThenElse (True, Zero, (Succ Zero))
             IfThenElse (False, Zero, (Succ Zero))
         ]
     for term in terms do
