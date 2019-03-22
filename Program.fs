@@ -34,6 +34,7 @@ module Term =
                 let t1' = step t1
                 If (t1', t2, t3)
 
+            (* Numeric *)
             | Succ t1 ->
                 let t1' = step t1
                 Succ t1'
