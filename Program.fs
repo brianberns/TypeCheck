@@ -18,7 +18,7 @@ type Term =
     /// E.g. "(x y)"
     | Application of (Term * Term)
 
-    /// Converts expression to string.
+    /// Converts term to string.
     member this.String =
 
         let nLevels =
@@ -31,7 +31,7 @@ type Term =
             depth this
 
         let toParam index =
-            char (nLevels - index - 1 + int 'a') |> string
+            char (((nLevels - index - 1 + 26) % 26) + int 'a') |> string
 
         let rec loop iLevel term =
             match term with
@@ -45,7 +45,7 @@ type Term =
 
         this |> loop 0
 
-    /// Converts expression to string.
+    /// Converts term to string.
     override this.ToString() = this.String
 
 module Term =
@@ -92,8 +92,10 @@ module Term =
                 | expr -> failwithf "Not supported: %A" expr
             quot |> loop []
 
+    /// Constructs a term from an F# quotation.
     let ofQuot = FSharp.ofQuot
 
+    /// Text parsing.
     module private Parse =
 
         open FParsec
@@ -156,9 +158,10 @@ module Term =
         let parse str =
             let parser = !parseTermRef .>> eof   // force consumption of entire string
             match runParserOnString parser [] "" str with
-                | Success (expr, _, _) -> expr
+                | Success (term, _, _) -> term
                 | Failure (msg, _, _) -> failwith msg
 
+    /// Parses a term from a string.
     let parse = Parse.parse
 
     /// The substitution of a term s for variable number j in a term t.
@@ -179,7 +182,7 @@ module Term =
 
     /// Is the given term a value?
     let isValue = function
-        | Abstraction _ -> true   // Call-by-value evaluation stops when it reaches a lambda, values can be arbitrary lambda-terms
+        | Abstraction _ -> true   // call-by-value evaluation stops when it reaches a lambda, so values can be arbitrary lambda-terms
         | _ -> false
 
     /// Active pattern for values.
@@ -194,11 +197,11 @@ module Term =
         /// Reduces a term by one step, if it's not already in normal form.
         let rec step = function
 
-                // reduce first term
+                // try to reduce first term
             | Application (Step t1', t2) ->
                 Application (t1', t2) |> Some
 
-                // reduce second term if first term is a value
+                // try to reduce second term if first term is a value
             | Application (Value v1, Step t2') ->
                 Application (v1, t2') |> Some
 
@@ -228,42 +231,8 @@ module Lang =
     let True = <@@ fun x y -> x @@> |> Term.ofQuot
     let False = <@@ fun x y -> y @@> |> Term.ofQuot
     let If = <@@ fun b x y -> b x y @@> |> Term.ofQuot
-    let And =
-        Abstraction (
-            Abstraction (
-                Application (
-                    Application (Variable 1, Variable 0),
-                    False)))
-    let Or =
-        Abstraction (
-            Abstraction (
-                Application (
-                    Application (Variable 1, True),
-                    Variable 0)))
-
-    let Zero =  <@@ fun f x -> x @@> |> Term.ofQuot   // same as False
-    let One =   <@@ fun f x -> f x @@> |> Term.ofQuot
-
-    let Succ = <@@ fun n f x -> f ((n f) x) @@> |> Term.ofQuot
-    let Plus = <@@ fun m n f x -> (n f) ((m f) x) @@> |> Term.ofQuot
-    let Mult = <@@ fun m n f -> m (n f) @@> |> Term.ofQuot
-
-    /// Strict fixed point combinator
-    /// https://www.wikiwand.com/en/Fixed-point_combinator#/Strict_fixed_point_combinator
-    let Z =
-       "λf.(λx.(f λv.((x x) v)) λx.(f λv.((x x) v)))" |> Term.parse
-
-    /// Inline "or".
-    let (.||.) t1 t2 =
-        Application (
-            Application (Or, t1),
-            t2)
-
-    /// Inline "and".
-    let (.&&.) t1 t2 =
-        Application (
-            Application (And, t1),
-            t2)
+    let And = sprintf "λp.λq.((p q) %A)" False |> Term.parse
+    let Or = sprintf "λp.λq.((p %A) q)" True |> Term.parse
 
 [<EntryPoint>]
 let main argv =
@@ -273,38 +242,16 @@ let main argv =
 
     let terms =
         [
-            True .||. False
-            True .&&. False
-        ]
+            sprintf "((%A %A) %A)" Or True False
+            sprintf "((%A %A) %A)" And True False
+            sprintf "(((%A %A) %A) %A)" If True True False
+        ] |> Seq.map Term.parse
     for term in terms do
         printfn ""
-        printfn "%A" term
+        printfn "Input:  %A" term
         let term' = Term.eval term
-        printfn "Eval: %A" term'
+        printfn "Output: %A" term'
         if term' |> Term.isValue |> not then
             printfn "*** ERROR ***"
-
-    (*
-    let IsZero =
-        sprintf "λn.((n λx.%A) %A)" False True
-            |> Term.parse
-    let Pred =
-        "λn.λf.λx.(((n λg.λh.(h (g f))) λu.x) λu.u)"
-            |> Term.parse
-    let FactorialNonRecursive =
-        sprintf "λg.λn.(((%A (%A n)) %A) ((%A n) (g (%A n))))" If IsZero One Mult Pred
-            |> Term.parse
-    let FactorialRecursive =
-        sprintf "(%A %A)" Y FactorialNonRecursive
-            |> Term.parse
-
-    let expr =
-        sprintf "(%A %A)" FactorialRecursive One |> Expr.parse |> Expr.eval
-    Assert.AreEqual(One, expr)
-
-    let expr =
-        sprintf "(%A %A)" FactorialRecursive Two |> Expr.parse |> Expr.eval
-    Assert.AreEqual(Two, expr)
-    *)
 
     0
