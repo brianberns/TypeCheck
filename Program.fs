@@ -3,27 +3,77 @@
  * https://www.cis.upenn.edu/~bcpierce/tapl/
  *)
 
-/// Language syntax.
+/// Make our own default unsigned integer since F# doesn't have one.
+type uint = uint32
+
+[<AutoOpen>]
+module uint =
+
+    /// Cast to unsigned.
+    let uint = uint32
+
+/// Abstract syntax for lambda calculus.
 type Term =
 
-    (* Boolean *)
-    | True
-    | False
-    | If of (Term (*t1*) * Term (*t2*) * Term (*t3*))
+    /// e.g. "x", using de Bruijn index instead of actual name
+    | Variable of uint
 
-    (* Numeric *)
-    | Zero
-    | Succ of Term
-    | Pred of Term
-    | IsZero of Term
+    /// E.g. "λx.x", which is λ.0 using de Bruijn indexes
+    | Abstraction of Term
+
+    /// E.g. "x y"
+    | Application of (Term * Term)
 
 module Term =
 
-    /// Active pattern for numeric values.
-    let rec (|NumericValue|_|) = function
-        | Zero -> Some Zero
-        | Succ (NumericValue nv) -> Some (Succ nv)
-        | _ -> None
+    /// Shifts a term by the given amount
+    let shift amount term =
+
+        /// The d-place shift of a term above cutoff c.
+        let rec loop c (d : int) = function
+            | Variable k ->
+                Variable (
+                    if k < c then k
+                    else
+                        let k' = int k + d
+                        if k' < 0 then failwith "Negative index"
+                        uint k')
+            | Abstraction t1 ->
+                Abstraction (
+                    loop (c + 1u) d t1)
+            | Application (t1, t2) ->
+                Application (
+                    loop c d t1,
+                    loop c d t2)
+
+        term |> loop 0u amount
+
+    /// The substitution of a term s for variable number j in a term t.
+    let rec substitute j s t =
+        match t with
+            | Variable k ->
+                if k = j then s
+                else t
+            | Abstraction t1 ->
+                let j' = j + 1u
+                let s' = shift 1 s
+                Abstraction (
+                    t1 |> substitute j' s')
+            | Application (t1, t2) ->
+                Application (
+                    t1 |> substitute j s,
+                    t2 |> substitute j s)
+
+    /// Is the given term a value?
+    let isValue = function
+        | Abstraction _ -> true   // Call-by-value evaluation stops when it reaches a lambda, values can be arbitrary lambda-terms
+        | _ -> false
+
+    /// Active pattern for values.
+    let rec (|Value|_|) term =
+        if isValue term then
+            Some term
+        else None
 
     /// Fully evaluates the given term, reducing it to normal form.
     let rec eval term =
@@ -31,33 +81,24 @@ module Term =
         /// Reduces a term by one step, if it's not already in normal form.
         let rec step = function
 
-                // boolean
-            | If (True, t2, _) -> Some t2
-            | If (False, _, t3) -> Some t3
-            | If (t1, t2, t3) ->
+                // reduce first term
+            | Application (t1, t2) ->
                 step t1
                     |> Option.map (fun t1' ->
-                        If (t1', t2, t3))
+                        Application (t1', t2))
 
-                // numeric
-            | Succ t1 ->
-                step t1
-                    |> Option.map (fun t1' ->
-                        Succ t1')
-            | Pred Zero -> Some Zero
-            | Pred (Succ (NumericValue nv1)) ->
-                Some nv1
-            | Pred t1 ->
-                step t1
-                    |> Option.map (fun t1' ->
-                        Pred t1')
-            | IsZero Zero -> Some True
-            | IsZero (Succ (NumericValue _)) ->
-                Some False
-            | IsZero t1 ->
-                step t1
-                    |> Option.map (fun t1' ->
-                        IsZero t1')
+                // reduce second term if first term is a value
+            | Application (Value v1, t2) ->
+                step t2
+                    |> Option.map (fun t2' ->
+                        Application (v1, t2'))
+
+                // function application (beta-reduction)
+            | Application (Abstraction t12, Value v2) ->
+                t12
+                    |> substitute 0u (shift 1 v2)
+                    |> shift -1
+                    |> Some
 
                 // normal form - no further reduction possible
             | _ -> None
@@ -68,22 +109,25 @@ module Term =
                 eval term')
             |> Option.defaultValue term
 
-    /// Is the given term a value?
-    let isValue = function
-        | True
-        | False -> true
-        | NumericValue _ -> true
-        | _ -> false
+[<AutoOpen>]
+module Lang =
+
+    let True = Abstraction (Abstraction (Variable 1u))
+    let False = Abstraction (Abstraction (Variable 0u))
+    let Or =
+        Abstraction (
+            Abstraction (
+                Application (
+                    Application (Variable 1u, True),
+                    Variable 0u)))
 
 [<EntryPoint>]
 let main argv =
-
     let terms =
         [
-            If (True, If (False, False, False), True)
-            If (True, True, If (False, False, False))
-            Pred (Succ (Pred Zero))
-            If (Zero, Zero, Zero)
+            Application (
+                Application (Or, True),
+                False)
         ]
     for term in terms do
         printfn ""
