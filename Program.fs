@@ -13,6 +13,7 @@ module uint =
     let uint = uint32
 
 /// Abstract syntax for lambda calculus.
+[<StructuredFormatDisplay("{String}")>]
 type Term =
 
     /// e.g. "x", using de Bruijn index instead of actual name
@@ -23,6 +24,16 @@ type Term =
 
     /// E.g. "x y"
     | Application of (Term * Term)
+
+    /// Converts expression to string.
+    member this.String =
+        match this with
+            | Variable index -> index.ToString()
+            | Application (func, arg) -> sprintf "(%A %A)" func arg
+            | Abstraction body -> sprintf "λ.%A" body
+
+    /// Converts expression to string.
+    override this.ToString() = this.String
 
 module Term =
 
@@ -47,6 +58,32 @@ module Term =
                     loop c d t2)
 
         term |> loop 0u amount
+
+    /// Interop with F# quotations.
+    module private FSharp =
+
+        open Microsoft.FSharp.Quotations.Patterns
+
+        /// Constructs a term from an F# quotation.
+        let ofQuot quot =
+            let rec loop names = function
+                | Var var ->
+                    names
+                        |> List.findIndex (fun name ->
+                            var.Name = name)
+                        |> uint
+                        |> Variable
+                | Lambda (param, body) ->
+                    let names' = param.Name :: names
+                    Abstraction (body |> loop names')
+                | Application (func, arg) ->
+                    Application (
+                        func |> loop names,
+                        arg |> loop names)
+                | expr -> failwithf "Not supported: %A" expr
+            quot |> loop []
+
+    let ofQuot = FSharp.ofQuot
 
     /// The substitution of a term s for variable number j in a term t.
     let rec substitute j s t =
@@ -82,16 +119,12 @@ module Term =
         let rec step = function
 
                 // reduce first term
-            | Application (t1, t2) ->
-                step t1
-                    |> Option.map (fun t1' ->
-                        Application (t1', t2))
+            | Application (Step t1', t2) ->
+                Application (t1', t2) |> Some
 
                 // reduce second term if first term is a value
-            | Application (Value v1, t2) ->
-                step t2
-                    |> Option.map (fun t2' ->
-                        Application (v1, t2'))
+            | Application (Value v1, Step t2') ->
+                Application (v1, t2') |> Some
 
                 // function application (beta-reduction)
             | Application (Abstraction t12, Value v2) ->
@@ -103,6 +136,10 @@ module Term =
                 // normal form - no further reduction possible
             | _ -> None
 
+        /// Active pattern for a term that can take a step.
+        and (|Step|_|) term =
+            step term
+
             // evaluate the given term recursively, one step at a time
         step term
             |> Option.map (fun term' ->
@@ -112,8 +149,8 @@ module Term =
 [<AutoOpen>]
 module Lang =
 
-    let True = Abstraction (Abstraction (Variable 1u))
-    let False = Abstraction (Abstraction (Variable 0u))
+    let True = <@@ fun x y -> x @@> |> Term.ofQuot
+    let False = <@@ fun x y -> y @@> |> Term.ofQuot
     let Or =
         Abstraction (
             Abstraction (
@@ -121,13 +158,23 @@ module Lang =
                     Application (Variable 1u, True),
                     Variable 0u)))
 
+    /// Inline or.
+    let (.||.) t1 t2 =
+        Abstraction (
+            Abstraction (
+                Application (
+                    Application (Or, t1),
+                    t2)))
+
 [<EntryPoint>]
 let main argv =
+
+    // display λ chars correctly
+    System.Console.OutputEncoding <- System.Text.Encoding.Unicode
+
     let terms =
         [
-            Application (
-                Application (Or, True),
-                False)
+            Application (Application (Or, True), False)
         ]
     for term in terms do
         printfn ""
