@@ -13,7 +13,7 @@ type Term =
     | Variable of int
 
     /// E.g. "λx.x", which is λ.0 using de Bruijn indexes
-    | Abstraction of Term
+    | Abstraction of (string (*original parameter name*) * Term (*body*))
 
     /// E.g. "(x y)"
     | Application of (Term * Term)
@@ -21,32 +21,27 @@ type Term =
     /// Converts term to string.
     member this.String =
 
-        let nLevels =
-            let rec depth = function
-                | Variable _ -> 0
-                | Application (func, arg) ->
-                    max (depth func) (depth arg)
-                | Abstraction body ->
-                    depth body + 1
-            depth this
+        let rec loop (ctx : Context) = function
+            | Variable index ->
+                if index < ctx.Length then
+                    fst ctx.[index]
+                else
+                    (int 'z' - (index - ctx.Length))   // make up a name
+                        |> char
+                        |> string
+            | Application (func, arg) ->
+                sprintf "(%s %s)" (loop ctx func) (loop ctx arg)
+            | Abstraction (name, body) ->
+                let ctx' = (name, Dummy) :: ctx
+                sprintf "λ%s.%s" name (loop ctx' body)
 
-        let toParam index =
-            char (((nLevels - index - 1 + 26) % 26) + int 'a') |> string
-
-        let rec loop iLevel term =
-            match term with
-                | Variable index ->
-                    toParam (index + nLevels - iLevel)
-                | Application (func, arg) ->
-                    sprintf "(%s %s)" (loop iLevel func) (loop iLevel arg)
-                | Abstraction body ->
-                    let param = toParam (nLevels - iLevel - 1)
-                    sprintf "λ%s.%s" param (loop (iLevel + 1) body)
-
-        this |> loop 0
+        this |> loop List.empty
 
     /// Converts term to string.
     override this.ToString() = this.String
+
+and Binding = Dummy
+and Context = List<string (*variable name*) * Binding>
 
 module Term =
 
@@ -59,8 +54,9 @@ module Term =
                 Variable (
                     if k < c then k
                     else k + d)
-            | Abstraction t1 ->
+            | Abstraction (name, t1) ->
                 Abstraction (
+                    name,
                     loop (c + 1) d t1)
             | Application (t1, t2) ->
                 Application (
@@ -84,7 +80,9 @@ module Term =
                         |> Variable
                 | Lambda (param, body) ->
                     let names' = param.Name :: names
-                    Abstraction (body |> loop names')
+                    Abstraction (
+                        param.Name,
+                        body |> loop names')
                 | Application (func, arg) ->
                     Application (
                         func |> loop names,
@@ -123,7 +121,8 @@ module Term =
         let private pushName =
             parseName
                 >>= (fun param ->
-                    updateUserState (fun names -> param :: names))
+                    updateUserState (fun names -> param :: names)
+                        >>% param)
 
         let private popName =
             updateUserState List.tail
@@ -134,8 +133,8 @@ module Term =
                 pushName
                 (skipChar '.')
                 parseTerm
-                (fun _ _ _ body ->
-                    Abstraction body)
+                (fun _ param _ body ->
+                    Abstraction (param, body))
                 .>> popName
 
         let private parseApplication =
@@ -170,10 +169,11 @@ module Term =
             | Variable k ->
                 if k = j then s
                 else t
-            | Abstraction t1 ->
+            | Abstraction (name, t1) ->
                 let j' = j + 1
                 let s' = shift 1 s
                 Abstraction (
+                    name,
                     t1 |> substitute j' s')
             | Application (t1, t2) ->
                 Application (
@@ -206,7 +206,7 @@ module Term =
                 Application (v1, t2') |> Some
 
                 // function application (beta-reduction)
-            | Application (Abstraction t12, Value v2) ->
+            | Application (Abstraction (_, t12), Value v2) ->
                 t12
                     |> substitute 0 (shift 1 v2)
                     |> shift -1
@@ -242,10 +242,11 @@ let main argv =
 
     let terms =
         [
-            sprintf "((%A %A) %A)" Or True False
-            sprintf "((%A %A) %A)" And True False
-            sprintf "(((%A %A) %A) %A)" If True True False
-        ] |> Seq.map Term.parse
+            sprintf "((%A %A) %A)" Or True False |> Term.parse
+            sprintf "((%A %A) %A)" And True False |> Term.parse
+            sprintf "(((%A %A) %A) %A)" If True True False |> Term.parse
+            (Application (Variable 0, Variable 1))
+        ]
     for term in terms do
         printfn ""
         printfn "Input:  %A" term
