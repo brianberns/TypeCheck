@@ -5,9 +5,11 @@
 
 open System
 
-/// Abstract syntax for lambda calculus.
+/// Our language's abstract syntax.
 [<StructuredFormatDisplay("{String}")>]
 type Term =
+
+    (* Lambda-calculus *)
 
     /// e.g. "x", but using de Bruijn index instead of actual name
     | Variable of int
@@ -18,15 +20,22 @@ type Term =
     /// E.g. "(x y)"
     | Application of (Term * Term)
 
+    (* Booleans *)
+
+    | True
+    | False
+    | If of (Term (*condition*) * Term (*then*) * Term (*else*))
+
     /// Converts term to string.
     member this.String =
 
         let rec loop (ctx : Context) = function
+
             | Variable index ->
                 if index < ctx.Length then
                     fst ctx.[index]
                 else
-                    (int 'z' - (index - ctx.Length))   // make up a name
+                    (int 'a' + (index - ctx.Length))   // make up a name
                         |> char
                         |> string
             | Application (func, arg) ->
@@ -34,6 +43,12 @@ type Term =
             | Abstraction (name, body) ->
                 let ctx' = (name, Dummy) :: ctx
                 sprintf "λ%s.%s" name (loop ctx' body)
+
+            | True -> "True"
+            | False -> "False"
+            | If (cond, thenBranch, elseBranch) ->
+                sprintf "If %A Then %A Else %A"
+                    cond thenBranch elseBranch
 
         this |> loop List.empty
 
@@ -44,12 +59,14 @@ and Binding = Dummy
 and Context = List<string (*variable name*) * Binding>
 
 module Term =
+    open System
 
     /// Shifts a term by the given amount
     let shift amount term =
 
         /// The d-place shift of a term above cutoff c.
         let rec loop c (d : int) = function
+
             | Variable k ->
                 Variable (
                     if k < c then k
@@ -62,6 +79,14 @@ module Term =
                 Application (
                     loop c d t1,
                     loop c d t2)
+
+            | True -> True
+            | False -> False
+            | If (t1, t2, t3) ->
+                If (
+                    loop c d t1,
+                    loop c d t2,
+                    loop c d t3)
 
         term |> loop 0 amount
 
@@ -166,6 +191,7 @@ module Term =
     /// The substitution of a term s for variable number j in a term t.
     let rec substitute j s t =
         match t with
+
             | Variable k ->
                 if k = j then s
                 else t
@@ -180,9 +206,19 @@ module Term =
                     t1 |> substitute j s,
                     t2 |> substitute j s)
 
+            | True -> True
+            | False -> False
+            | If (t1, t2, t3) ->
+                If (
+                    t1 |> substitute j s,
+                    t2 |> substitute j s,
+                    t3 |> substitute j s)
+
     /// Is the given term a value?
     let isValue = function
-        | Abstraction _ -> true   // call-by-value evaluation stops when it reaches a lambda, so values can be arbitrary lambda-terms
+        | Abstraction _      // call-by-value evaluation stops when it reaches a lambda, so values can be arbitrary lambda-terms
+        | True
+        | False -> true
         | _ -> false
 
     /// Active pattern for values.
@@ -212,6 +248,18 @@ module Term =
                     |> shift -1
                     |> Some
 
+                // then-branch
+            | If (True, t2, _) ->
+                Some t2
+
+                // else-branch
+            | If (False, _, t3) ->
+                Some t3
+
+                // reduce conditional
+            | If (Step t1', t2, t3) ->
+                If (t1', t2, t3) |> Some
+
                 // normal form - no further reduction possible
             | _ -> None
 
@@ -225,8 +273,7 @@ module Term =
                 eval term')
             |> Option.defaultValue term
 
-[<AutoOpen>]
-module Lang =
+module Lambda =
 
     let True = <@@ fun x y -> x @@> |> Term.ofQuot
     let False = <@@ fun x y -> y @@> |> Term.ofQuot
@@ -242,10 +289,14 @@ let main argv =
 
     let terms =
         [
-            sprintf "((%A %A) %A)" Or True False |> Term.parse
-            sprintf "((%A %A) %A)" And True False |> Term.parse
-            sprintf "(((%A %A) %A) %A)" If True True False |> Term.parse
+            sprintf "((%A %A) %A)"
+                Lambda.Or Lambda.True Lambda.False |> Term.parse
+            sprintf "((%A %A) %A)"
+                Lambda.And Lambda.True Lambda.False |> Term.parse
+            sprintf "(((%A %A) %A) %A)"
+                Lambda.If Lambda.True Lambda.True Lambda.False |> Term.parse
             (Application (Variable 0, Variable 1))
+            If (True, If (False, False, False), True)
         ]
     for term in terms do
         printfn ""
