@@ -5,32 +5,46 @@
 
 open System
 
-/// Our language's abstract syntax.
+type Binding = Dummy
+
+type Context = List<string (*variable name*) * Binding>
+
+module Context =
+
+    /// Empty context.
+    let empty : Context = []
+
+/// Lambda-calculus with Booleans.
 [<StructuredFormatDisplay("{String}")>]
 type Term =
 
     (* Lambda-calculus *)
 
-    /// e.g. "x", but using de Bruijn index instead of actual name
+    /// E.g. "x", but using de Bruijn index instead of actual name.
     | Variable of int
 
-    /// E.g. "λx.x", which is λ.0 using de Bruijn indexes
+    /// Lambda abstraction (i.e. anonymous function definition).
+    /// E.g. "λx.x" (which is λ.0 using de Bruijn indexes).
     | Abstraction of (string (*original parameter name*) * Term (*body*))
 
-    /// E.g. "(x y)"
+    /// Function application. E.g. "(x y)" applies function x to value y.
     | Application of (Term * Term)
 
     (* Booleans *)
 
+    /// Literal.
     | True
+
+    /// Literal.
     | False
+
+    /// If-then-else expression. E.g. "If b then x else y".
     | If of (Term (*condition*) * Term (*then*) * Term (*else*))
 
     /// Converts term to string.
     member this.String =
 
         let rec loop (ctx : Context) = function
-
             | Variable index ->
                 if index < ctx.Length then
                     fst ctx.[index]
@@ -43,30 +57,24 @@ type Term =
             | Abstraction (name, body) ->
                 let ctx' = (name, Dummy) :: ctx
                 sprintf "λ%s.%s" name (loop ctx' body)
-
             | True -> "True"
             | False -> "False"
             | If (cond, thenBranch, elseBranch) ->
                 sprintf "If %A Then %A Else %A"
                     cond thenBranch elseBranch
 
-        this |> loop List.empty
+        this |> loop Context.empty
 
     /// Converts term to string.
     override this.ToString() = this.String
 
-and Binding = Dummy
-and Context = List<string (*variable name*) * Binding>
-
 module Term =
-    open System
 
     /// Shifts a term by the given amount
     let shift amount term =
 
         /// The d-place shift of a term above cutoff c.
         let rec loop c (d : int) = function
-
             | Variable k ->
                 Variable (
                     if k < c then k
@@ -79,7 +87,6 @@ module Term =
                 Application (
                     loop c d t1,
                     loop c d t2)
-
             | True -> True
             | False -> False
             | If (t1, t2, t3) ->
@@ -191,7 +198,6 @@ module Term =
     /// The substitution of a term s for variable number j in a term t.
     let rec substitute j s t =
         match t with
-
             | Variable k ->
                 if k = j then s
                 else t
@@ -205,7 +211,6 @@ module Term =
                 Application (
                     t1 |> substitute j s,
                     t2 |> substitute j s)
-
             | True -> True
             | False -> False
             | If (t1, t2, t3) ->
@@ -256,7 +261,7 @@ module Term =
             | If (False, _, t3) ->
                 Some t3
 
-                // reduce conditional
+                // try to reduce conditional
             | If (Step t1', t2, t3) ->
                 If (t1', t2, t3) |> Some
 
@@ -297,6 +302,7 @@ let main argv =
                 Lambda.If Lambda.True Lambda.True Lambda.False |> Term.parse
             (Application (Variable 0, Variable 1))
             If (True, If (False, False, False), True)
+            If (Lambda.True, True, False)
         ]
     for term in terms do
         printfn ""
