@@ -5,7 +5,24 @@
 
 open System
 
-type Binding = Dummy
+[<StructuredFormatDisplay("{String}")>]
+type Type =
+    | Boolean
+    | Function of (Type (*input*) * Type (*output*))
+
+    /// Converts type to string.
+    member this.String =
+        match this with
+            | Boolean -> "bool"
+            | Function (typ1, typ2) ->
+                sprintf "(%A -> %A)" typ1.String typ2.String
+
+    /// Converts type to string.
+    override this.ToString() = this.String
+
+type Binding =
+    | Dummy
+    | Type of Type
 
 type Context = List<string (*variable name*) * Binding>
 
@@ -25,7 +42,10 @@ type Term =
 
     /// Lambda abstraction (i.e. anonymous function definition).
     /// E.g. "λx.x" (which is λ.0 using de Bruijn indexes).
-    | Abstraction of (string (*original parameter name*) * Term (*body*))
+    | Abstraction of (
+        string (*original parameter name*) *
+        Type (*type of parameter*) *
+        Term (*body*))
 
     /// Function application. E.g. "(x y)" applies function x to value y.
     | Application of (Term * Term)
@@ -54,9 +74,9 @@ type Term =
                         |> string
             | Application (func, arg) ->
                 sprintf "(%s %s)" (loop ctx func) (loop ctx arg)
-            | Abstraction (name, body) ->
+            | Abstraction (name, typ, body) ->
                 let ctx' = (name, Dummy) :: ctx
-                sprintf "λ%s.%s" name (loop ctx' body)
+                sprintf "λ%s:%A.%s" name typ (loop ctx' body)
             | True -> "True"
             | False -> "False"
             | If (cond, thenBranch, elseBranch) ->
@@ -79,9 +99,10 @@ module Term =
                 Variable (
                     if k < c then k
                     else k + d)
-            | Abstraction (name, t1) ->
+            | Abstraction (name, typ, t1) ->
                 Abstraction (
                     name,
+                    typ,
                     loop (c + 1) d t1)
             | Application (t1, t2) ->
                 Application (
@@ -97,115 +118,18 @@ module Term =
 
         term |> loop 0 amount
 
-    /// Interop with F# quotations.
-    module private FSharp =
-
-        open Microsoft.FSharp.Quotations.Patterns
-
-        /// Constructs a term from an F# quotation.
-        let ofQuot quot =
-            let rec loop names = function
-                | Var var ->
-                    names
-                        |> List.findIndex (fun name ->
-                            var.Name = name)
-                        |> Variable
-                | Lambda (param, body) ->
-                    let names' = param.Name :: names
-                    Abstraction (
-                        param.Name,
-                        body |> loop names')
-                | Application (func, arg) ->
-                    Application (
-                        func |> loop names,
-                        arg |> loop names)
-                | expr -> failwithf "Not supported: %A" expr
-            quot |> loop []
-
-    /// Constructs a term from an F# quotation.
-    let ofQuot = FSharp.ofQuot
-
-    /// Text parsing.
-    module private Parse =
-
-        open FParsec
-
-        type State = List<string (*variable name*)>
-
-        let private parseTerm, private parseTermRef =
-            createParserForwardedToRef<Term, State>()
-
-        let private parseName =
-            many1Chars (satisfy (fun c ->
-                Char.IsLetterOrDigit(c) && (c <> 'λ')))
-
-        let private parseIndex =
-            pipe2
-                getUserState
-                parseName
-                (fun names name ->
-                    names |> List.findIndex (fun n -> n = name))
-
-        let private parseVariable =
-            parseIndex
-                |>> Variable
-
-        let private pushName =
-            parseName
-                >>= (fun param ->
-                    updateUserState (fun names -> param :: names)
-                        >>% param)
-
-        let private popName =
-            updateUserState List.tail
-
-        let private parseAbstraction =
-            pipe4
-                (skipAnyOf ['λ'; '^'; '\\'])
-                pushName
-                (skipChar '.')
-                parseTerm
-                (fun _ param _ body ->
-                    Abstraction (param, body))
-                .>> popName
-
-        let private parseApplication =
-            pipe5
-                (skipChar '(')
-                parseTerm
-                (many1 <| skipChar ' ')
-                parseTerm
-                (skipChar ')')
-                (fun _ func _ arg _ ->
-                    Application (func, arg))
-
-        do parseTermRef :=
-            choice [
-                parseVariable
-                parseAbstraction
-                parseApplication
-            ]
-
-        let parse str =
-            let parser = !parseTermRef .>> eof   // force consumption of entire string
-            match runParserOnString parser [] "" str with
-                | Success (term, _, _) -> term
-                | Failure (msg, _, _) -> failwith msg
-
-    /// Parses a term from a string.
-    let parse = Parse.parse
-
     /// The substitution of a term s for variable number j in a term t.
     let rec substitute j s t =
         match t with
             | Variable k ->
                 if k = j then s
                 else t
-            | Abstraction (name, t1) ->
+            | Abstraction (name, typ, t1) ->
                 let j' = j + 1
                 let s' = shift 1 s
                 Abstraction (
                     name,
+                    typ,
                     t1 |> substitute j' s')
             | Application (t1, t2) ->
                 Application (
@@ -247,7 +171,7 @@ module Term =
                 Application (v1, t2') |> Some
 
                 // function application (beta-reduction)
-            | Application (Abstraction (_, t12), Value v2) ->
+            | Application (Abstraction (_, _, t12), Value v2) ->
                 t12
                     |> substitute 0 (shift 1 v2)
                     |> shift -1
@@ -278,13 +202,55 @@ module Term =
                 eval term')
             |> Option.defaultValue term
 
-module Lambda =
+    let typeOf term =
 
-    let True = <@@ fun x y -> x @@> |> Term.ofQuot
-    let False = <@@ fun x y -> y @@> |> Term.ofQuot
-    let If = <@@ fun b x y -> b x y @@> |> Term.ofQuot
-    let And = sprintf "λp.λq.((p q) %A)" False |> Term.parse
-    let Or = sprintf "λp.λq.((p %A) q)" True |> Term.parse
+        let rec loop (ctx : Context) = function
+
+            | Variable index ->
+                match ctx.[index] |> snd with
+                    | Type typ -> Ok typ
+                    | _ -> failwith "Unexpected"
+
+            | Abstraction (name, paramTyp, body) ->
+                let ctx' = (name, Type paramTyp) :: ctx
+                loop ctx' body
+                    |> Result.map (fun bodyTyp ->
+                        Function (paramTyp, bodyTyp))
+
+            | Application (func, arg) ->
+                let funcTypRes = loop ctx func
+                let argTypRes = loop ctx arg
+                match (funcTypRes, argTypRes) with
+                    | (Ok (Function (funcTypIn, funcTypOut)), Ok argTyp) ->
+                        if argTyp = funcTypIn then
+                            Ok funcTypOut
+                        else
+                            sprintf "Type mismatch: %A and %A" funcTypIn argTyp |> Error
+                    | (Ok _, Ok _) ->
+                        sprintf "Not a function: %A" func |> Error
+                    | (Error msg, _) -> Error msg
+                    | (_, Error msg) -> Error msg
+
+            | True
+            | False -> Ok Boolean
+
+            | If (t1, t2, t3) ->
+                let typ1Res = loop ctx t1
+                let typ2Res = loop ctx t2
+                let typ3Res = loop ctx t3
+                match (typ1Res, typ2Res, typ3Res) with
+                    | (Ok Boolean, Ok typ2, Ok typ3) ->
+                        if typ2 = typ3 then
+                            Ok typ2
+                        else
+                            sprintf "Type mismatch: %A and %A" t2 t3 |> Error
+                    | (Ok _, Ok _, Ok _) ->
+                        sprintf "Not a Boolean: %A" t1 |> Error
+                    | (Error msg, _, _) -> Error msg
+                    | (_, Error msg, _) -> Error msg
+                    | (_, _, Error msg) -> Error msg
+
+        term |> loop Context.empty
 
 [<EntryPoint>]
 let main argv =
@@ -294,22 +260,24 @@ let main argv =
 
     let terms =
         [
-            sprintf "((%A %A) %A)"
-                Lambda.Or Lambda.True Lambda.False |> Term.parse
-            sprintf "((%A %A) %A)"
-                Lambda.And Lambda.True Lambda.False |> Term.parse
-            sprintf "(((%A %A) %A) %A)"
-                Lambda.If Lambda.True Lambda.True Lambda.False |> Term.parse
             (Application (Variable 0, Variable 1))
             If (True, If (False, False, False), True)
-            If (Lambda.True, True, False)
+            If (True, If (False, Variable 0, False), True)
         ]
+
     for term in terms do
         printfn ""
         printfn "Input:  %A" term
-        let term' = Term.eval term
-        printfn "Output: %A" term'
-        if term' |> Term.isValue |> not then
-            printfn "*** ERROR ***"
+
+        let typ = Term.typeOf term
+        printfn "%A" <| typ
+
+        match typ with
+            | Ok _ ->
+                let term' = Term.eval term
+                printfn "Output: %A" term'
+                if term' |> Term.isValue |> not then
+                    printfn "*** ERROR ***"
+            | _ -> ()
 
     0
