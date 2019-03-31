@@ -20,16 +20,17 @@ type Type =
     /// Converts type to string.
     override this.ToString() = this.String
 
-type Binding =
-    | Dummy
-    | Type of Type
-
-type Context = List<string (*variable name*) * Binding>
+/// Context for a variable, accessed by de Bruijn indexes.
+type Context<'a> = List<string (*variable name*) * 'a>
 
 module Context =
 
     /// Empty context.
-    let empty : Context = []
+    let empty : Context<'a> = []
+
+    /// Adds the given binding to the context.
+    let add name value (ctx : Context<_>) : Context<_> =
+        (name, value) :: ctx
 
 /// Lambda-calculus with Booleans.
 [<StructuredFormatDisplay("{String}")>]
@@ -64,7 +65,7 @@ type Term =
     /// Converts term to string.
     member this.String =
 
-        let rec loop (ctx : Context) = function
+        let rec loop (ctx : Context<_>) = function
             | Variable index ->
                 if index < ctx.Length then
                     fst ctx.[index]
@@ -75,7 +76,7 @@ type Term =
             | Application (func, arg) ->
                 sprintf "(%s %s)" (loop ctx func) (loop ctx arg)
             | Abstraction (name, typ, body) ->
-                let ctx' = (name, Dummy) :: ctx
+                let ctx' = ctx |> Context.add name ()
                 sprintf "λ%s:%A.%s" name typ (loop ctx' body)
             | True -> "True"
             | False -> "False"
@@ -204,18 +205,34 @@ module Term =
 
     let typeOf term =
 
-        let rec loop (ctx : Context) = function
+        let rec loop (ctx : Context<_>) = function
+        
+            | True
+            | False -> Ok Boolean
+            | If (t1, t2, t3) ->
+                let typ1Res = loop ctx t1
+                let typ2Res = loop ctx t2
+                let typ3Res = loop ctx t3
+                match (typ1Res, typ2Res, typ3Res) with
+                    | (Ok Boolean, Ok typ2, Ok typ3) ->
+                        if typ2 = typ3 then
+                            Ok typ2
+                        else
+                            sprintf "Type mismatch: %A and %A" t2 t3 |> Error
+                    | (Ok _, Ok _, Ok _) ->
+                        sprintf "Not a Boolean: %A" t1 |> Error
+                    | (Error msg, _, _) -> Error msg
+                    | (_, Error msg, _) -> Error msg
+                    | (_, _, Error msg) -> Error msg
 
             | Variable index ->
                 if index < ctx.Length then
-                    match ctx.[index] |> snd with
-                        | Type typ -> Ok typ
-                        | _ -> failwith "Unexpected"
+                    ctx.[index] |> snd |> Ok
                 else
                     Error "Free variable"
 
             | Abstraction (name, paramTyp, body) ->
-                let ctx' = (name, Type paramTyp) :: ctx
+                let ctx' = ctx |> Context.add name paramTyp
                 loop ctx' body
                     |> Result.map (fun bodyTyp ->
                         Function (paramTyp, bodyTyp))
@@ -233,25 +250,6 @@ module Term =
                         sprintf "Not a function: %A" func |> Error
                     | (Error msg, _) -> Error msg
                     | (_, Error msg) -> Error msg
-
-            | True
-            | False -> Ok Boolean
-
-            | If (t1, t2, t3) ->
-                let typ1Res = loop ctx t1
-                let typ2Res = loop ctx t2
-                let typ3Res = loop ctx t3
-                match (typ1Res, typ2Res, typ3Res) with
-                    | (Ok Boolean, Ok typ2, Ok typ3) ->
-                        if typ2 = typ3 then
-                            Ok typ2
-                        else
-                            sprintf "Type mismatch: %A and %A" t2 t3 |> Error
-                    | (Ok _, Ok _, Ok _) ->
-                        sprintf "Not a Boolean: %A" t1 |> Error
-                    | (Error msg, _, _) -> Error msg
-                    | (_, Error msg, _) -> Error msg
-                    | (_, _, Error msg) -> Error msg
 
         term |> loop Context.empty
 
