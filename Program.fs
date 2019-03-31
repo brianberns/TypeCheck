@@ -5,21 +5,6 @@
 
 open System
 
-[<StructuredFormatDisplay("{String}")>]
-type Type =
-    | Boolean
-    | Function of (Type (*input*) * Type (*output*))
-
-    /// Converts type to string.
-    member this.String =
-        match this with
-            | Boolean -> "Boolean"
-            | Function (typ1, typ2) ->
-                sprintf "(%s -> %s)" typ1.String typ2.String
-
-    /// Converts type to string.
-    override this.ToString() = this.String
-
 /// Context for a variable, accessed by de Bruijn indexes.
 type Context<'a> = List<string (*variable name*) * 'a>
 
@@ -31,6 +16,26 @@ module Context =
     /// Adds the given binding to the context.
     let add name value (ctx : Context<_>) : Context<_> =
         (name, value) :: ctx
+
+/// Classification of terms.
+[<StructuredFormatDisplay("{String}")>]
+type Type =
+
+    /// E.g. True.
+    | Boolean
+
+    /// E.g. Boolean -> Boolean.
+    | Function of (Type (*input*) * Type (*output*))
+
+    /// Converts type to string.
+    member this.String =
+        match this with
+            | Boolean -> "Boolean"
+            | Function (typ1, typ2) ->
+                sprintf "(%s -> %s)" typ1.String typ2.String
+
+    /// Converts type to string.
+    override this.ToString() = this.String
 
 /// Lambda-calculus with Booleans.
 [<StructuredFormatDisplay("{String}")>]
@@ -146,22 +151,26 @@ module Term =
 
     /// Is the given term a value?
     let isValue = function
-        | Abstraction _      // call-by-value evaluation stops when it reaches a lambda, so values can be arbitrary lambda-terms
+        | Abstraction _   // call-by-value evaluation stops when it reaches a lambda abstraction
         | True
         | False -> true
         | _ -> false
 
-    /// Active pattern for values.
-    let rec (|Value|_|) term =
-        if isValue term then
-            Some term
-        else None
-
     /// Fully evaluates the given term, reducing it to normal form.
     let rec eval term =
 
+        /// Active pattern for a value.
+        let rec (|Value|_|) term =
+            if isValue term then
+                Some term
+            else None
+
+        /// Active pattern for a term that can take a step.
+        let rec (|Step|_|) term =
+            step term
+
         /// Reduces a term by one step, if it's not already in normal form.
-        let rec step = function
+        and step = function
 
                 // try to reduce first term
             | Application (Step t1', t2) ->
@@ -193,22 +202,22 @@ module Term =
                 // normal form - no further reduction possible
             | _ -> None
 
-        /// Active pattern for a term that can take a step.
-        and (|Step|_|) term =
-            step term
-
             // evaluate the given term recursively, one step at a time
         step term
             |> Option.map (fun term' ->
                 eval term')
             |> Option.defaultValue term
 
+    /// Determines the type of a term without evaluating it.
     let typeOf term =
 
         let rec loop (ctx : Context<_>) = function
         
             | True
             | False -> Ok Boolean
+
+                // conditional term must be a boolean and
+                // types of the then/else branches must match
             | If (t1, t2, t3) ->
                 let typ1Res = loop ctx t1
                 let typ2Res = loop ctx t2
@@ -231,12 +240,16 @@ module Term =
                 else
                     Error "Free variable"
 
+                // add parameter type to the context then
+                // determine type of body
             | Abstraction (name, paramTyp, body) ->
                 let ctx' = ctx |> Context.add name paramTyp
-                loop ctx' body
+                body
+                    |> loop ctx'
                     |> Result.map (fun bodyTyp ->
                         Function (paramTyp, bodyTyp))
 
+                // type of argument must match input type of function
             | Application (func, arg) ->
                 let funcTypRes = loop ctx func
                 let argTypRes = loop ctx arg
