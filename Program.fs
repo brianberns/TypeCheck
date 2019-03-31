@@ -13,9 +13,9 @@ type Type =
     /// Converts type to string.
     member this.String =
         match this with
-            | Boolean -> "bool"
+            | Boolean -> "Boolean"
             | Function (typ1, typ2) ->
-                sprintf "(%A -> %A)" typ1.String typ2.String
+                sprintf "(%s -> %s)" typ1.String typ2.String
 
     /// Converts type to string.
     override this.ToString() = this.String
@@ -80,7 +80,7 @@ type Term =
             | True -> "True"
             | False -> "False"
             | If (cond, thenBranch, elseBranch) ->
-                sprintf "If %A Then %A Else %A"
+                sprintf "(If %A Then %A Else %A)"
                     cond thenBranch elseBranch
 
         this |> loop Context.empty
@@ -207,9 +207,12 @@ module Term =
         let rec loop (ctx : Context) = function
 
             | Variable index ->
-                match ctx.[index] |> snd with
-                    | Type typ -> Ok typ
-                    | _ -> failwith "Unexpected"
+                if index < ctx.Length then
+                    match ctx.[index] |> snd with
+                        | Type typ -> Ok typ
+                        | _ -> failwith "Unexpected"
+                else
+                    Error "Free variable"
 
             | Abstraction (name, paramTyp, body) ->
                 let ctx' = (name, Type paramTyp) :: ctx
@@ -260,24 +263,22 @@ let main argv =
 
     let terms =
         [
-            (Application (Variable 0, Variable 1))
+            True
             If (True, If (False, False, False), True)
-            If (True, If (False, Variable 0, False), True)
+            Abstraction ("x", Boolean, Variable 0)
+            Abstraction ("x", Function(Boolean, Boolean), Variable 0)
+            Application(Abstraction ("x", Boolean, Variable 0), Abstraction ("x", Boolean, Variable 0))
         ]
-
     for term in terms do
         printfn ""
-        printfn "Input:  %A" term
-
-        let typ = Term.typeOf term
-        printfn "%A" <| typ
-
-        match typ with
-            | Ok _ ->
+        printfn "Input: %A" term
+        match Term.typeOf term with
+            | Ok typ ->
+                printfn "Type: %A" typ
                 let term' = Term.eval term
                 printfn "Output: %A" term'
                 if term' |> Term.isValue |> not then
                     printfn "*** ERROR ***"
-            | _ -> ()
+            | Error msg -> printfn "%s" msg
 
     0
