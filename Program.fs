@@ -278,6 +278,7 @@ let main argv =
             If (True, If (False, False, False), True)
             Abstraction ("x", Boolean, Variable 0)
             Abstraction ("x", Function(Boolean, Boolean), Variable 0)
+            Application(Abstraction ("x", Boolean, Variable 0), True)
             Application(Abstraction ("x", Boolean, Variable 0), Abstraction ("x", Boolean, Variable 0))
         ]
     for term in terms do
