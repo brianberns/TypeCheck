@@ -218,9 +218,9 @@ module Term =
                 // conditional term must be a boolean and
                 // types of the then/else branches must match
             | If (t1, t2, t3) ->
-                let typ1Res = loop ctx t1
-                let typ2Res = loop ctx t2
-                let typ3Res = loop ctx t3
+                let typ1Res = t1 |> loop ctx
+                let typ2Res = t2 |> loop ctx
+                let typ3Res = t3 |> loop ctx
                 match (typ1Res, typ2Res, typ3Res) with
                     | (Ok Boolean, Ok typ2, Ok typ3) ->
                         if typ2 = typ3 then
