@@ -204,8 +204,7 @@ module Term =
 
             // evaluate the given term recursively, one step at a time
         step term
-            |> Option.map (fun term' ->
-                eval term')
+            |> Option.map eval
             |> Option.defaultValue term
 
     /// Determines the type of a term without evaluating it.
